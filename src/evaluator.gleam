@@ -106,30 +106,23 @@ fn eval(expr: Expr, env: Env) -> Result(Value, EvalError) {
     LiteralBool(b) -> Ok(VBool(b))
     LiteralInt(n) -> Ok(VInt(n))
     LiteralList(elems, rest) -> eval_list(elems, rest, env)
-    Call(fn_expr, operands) ->
-      // YOUR CODE HERE (replace the code below)
-      Error(errors.NotImplemented(
-        "Call("
-        <> string.inspect(fn_expr)
-        <> ", "
-        <> string.inspect(operands)
-        <> ")",
-      ))
+    Call(fn_expr, operands) -> { 
+      let f = eval(fn_expr, env)
+      let os = list.try_map(operands, fn(o) {eval(o, env)})
+      case f, os {
+        Error(e), _ -> Error(e)
+        _, Error(e) -> Error(e)
+        Ok(f_val), Ok(operands_val) -> apply(f_val, operands_val)
+      }
+    }      
     // Evaluate the expression v exactly once, then extend env to include
     // the name bound to its value; finally, evaluate the body of the let.
     Let(name, v, body) ->
       case eval(v, env) {
         Error(e) -> Error(e)
-        // YOUR CODE HERE (replace the code below)
-        Ok(value) ->
-          Error(errors.NotImplemented(
-            "let "
-            <> name
-            <> " = "
-            <> string.inspect(value)
-            <> " in "
-            <> string.inspect(body),
-          ))
+        Ok(value) -> {
+          eval(body, Local(dict.from_list([#(name, value)]), env))
+        }
       }
     Case(subject, arms) ->
       // YOUR CODE HERE (replace the code below)
@@ -167,19 +160,14 @@ fn eval_list(
 ) -> Result(Value, EvalError) {
   case list.try_map(elems, fn(e) { eval(e, env) }), rest {
     Error(e), _ -> Error(e)
-    // YOUR CODE HERE (replace the code below)
-    Ok(head), None ->
-      Error(errors.NotImplemented("list of " <> string.inspect(head)))
+    Ok(head), None -> {
+      Ok(VList(head))
+    }
     Ok(head), Some(r) ->
       case eval(r, env) {
-        // YOUR CODE HERE (replace the code below)
-        Ok(VList(tail)) ->
-          Error(errors.NotImplemented(
-            "list of "
-            <> string.inspect(head)
-            <> " then "
-            <> string.inspect(tail),
-          ))
+        Ok(VList(tail)) -> {
+          Ok(VList(list.append(head, tail)))
+        } 
         Ok(other) ->
           Error(TypeError("`..` expects a list, got " <> describe(other)))
         Error(e) -> Error(e)
@@ -198,14 +186,9 @@ pub fn apply(f: Value, args: List(Value)) -> Result(Value, EvalError) {
         False -> Error(wrong_num_args(callable.name, wanted, list.length(args)))
         True ->
           case callable {
-            Builtin(_, _, run) ->
-              // YOUR CODE HERE (replace the code below)
-              Error(errors.NotImplemented(
-                "Builtin("
-                <> string.inspect(run)
-                <> ") with "
-                <> string.inspect(args),
-              ))
+            Builtin(_, _, run) -> {
+              run(args)
+            }
             UserFn(_, params, body, parent) ->
               // YOUR CODE HERE (replace the code below)
               Error(errors.NotImplemented(
@@ -254,16 +237,10 @@ fn get_field(v: Value, field: String) -> Result(Value, EvalError) {
 pub fn lookup(env: Env, name: String) -> Result(Value, EvalError) {
   case env {
     Local(bindings, parent) ->
-      // YOUR CODE HERE (replace the code below)
-      Error(errors.NotImplemented(
-        "lookup("
-        <> name
-        <> ") in Local("
-        <> string.inspect(dict.keys(bindings))
-        <> ", "
-        <> string.inspect(parent)
-        <> ")",
-      ))
+      case dict.get(bindings, name) {
+        Ok(value) -> Ok(value)
+        Error(Nil) -> lookup(parent, name)
+      }
     Global(bindings) ->
       case mutable_dict.get(bindings, name) {
         Ok(value) -> Ok(value)
