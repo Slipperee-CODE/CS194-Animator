@@ -121,27 +121,29 @@ fn eval(expr: Expr, env: Env) -> Result(Value, EvalError) {
       case eval(v, env) {
         Error(e) -> Error(e)
         Ok(value) -> {
-          eval(body, Local(dict.from_list([#(name, value)]), env))
+          eval(body, extend(env, [#(name, value)]))
         }
       }
-    Case(subject, arms) ->
-      // YOUR CODE HERE (replace the code below)
-      Error(errors.NotImplemented(
-        "Case("
-        <> string.inspect(subject)
-        <> ", "
-        <> string.inspect(arms)
-        <> ")",
-      ))
-    Lambda(params, body) ->
-      // YOUR CODE HERE (replace the code below)
-      Error(errors.NotImplemented(
-        "Lambda("
-        <> string.inspect(params)
-        <> ", "
-        <> string.inspect(body)
-        <> ")",
-      ))
+    Case(subject, arms) -> {
+      let s_val = eval(subject, env)
+      case s_val {
+        Ok(val) -> {
+          case find_arm(val, arms) {
+            Ok(#(bindings, body)) -> {
+              eval(body, extend(env, bindings))
+            }
+            Error(Nil) -> {
+              Error(errors.NoMatchingCase)
+            }
+          }
+        }
+        Error(e) -> {
+          Error(e)
+        }
+      }
+
+    }
+    Lambda(params, body) -> Ok(VFunc(UserFn("lambda", params, body, env)))
     FieldAccess(record, field) ->
       case eval(record, env) {
         Error(e) -> Error(e)
@@ -190,16 +192,7 @@ pub fn apply(f: Value, args: List(Value)) -> Result(Value, EvalError) {
               run(args)
             }
             UserFn(_, params, body, parent) ->
-              // YOUR CODE HERE (replace the code below)
-              Error(errors.NotImplemented(
-                "UserFn("
-                <> string.inspect(params)
-                <> ", "
-                <> string.inspect(body)
-                <> ", "
-                <> string.inspect(parent)
-                <> ")",
-              ))
+              eval(body, Local(dict.from_list(list.zip(params, args)), parent))
           }
       }
     }
@@ -276,7 +269,7 @@ fn match_pattern(
     PBool(b1), VBool(b2) if b1 == b2 -> Ok([])
     PInt(n1), VInt(n2) if n1 == n2 -> Ok([])
     PWildcard, _ -> Ok([])
-    // YOUR CODE HERE
+    PVar(v), _ -> Ok([#(v, value)]) 
     PList(elems, rest), VList(vs) -> match_list(elems, rest, vs)
     _, _ -> Error(Nil)
   }
@@ -291,12 +284,16 @@ fn match_list(
 ) -> Result(List(#(String, Value)), Nil) {
   case elems, rest, vs {
     [], None, [] -> Ok([])
-    // YOUR CODE HERE (replace the code below)
     [], Some(x), _ -> {
-      let _ = x
-      Error(Nil)
+      Ok([#(x, VList(vs))])
     }
-    // YOUR CODE HERE
+    [p, ..ps], rest, [u, ..us] -> {
+      case match_pattern(p, u), match_list(ps, rest, us) {
+        Error(Nil), _ -> Error(Nil)
+        _, Error(Nil) -> Error(Nil)
+        Ok(bindings), Ok(more_bindings) -> Ok(list.append(bindings, more_bindings))
+      }
+    }
     _, _, _ -> Error(Nil)
   }
 }
