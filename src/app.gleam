@@ -1,11 +1,15 @@
 //// Animator -- an application for program-generated drawings.
 
 import builtins
+import data
 import drawing
 import editor
 import errors
+import gleam/float
+import gleam/int
+import gleam/json
+import gleam/list
 import gleam/result
-import gleam/string
 import lustre
 import lustre/attribute as attr
 import lustre/effect.{type Effect}
@@ -13,7 +17,12 @@ import lustre/element.{type Element}
 import lustre/element/html
 import lustre/event
 import parser
+import render
 import shape.{type Path}
+
+// Set the drawing menu's value once its options are in the document.
+@external(javascript, "./data_ffi.mjs", "chooseOption")
+fn choose_option(root: a, name: String) -> Nil
 
 /// Your app's public address, once you've deployed it in Problem 13, such as
 /// "https://your-username.github.io/animator/".
@@ -28,7 +37,21 @@ pub const video_url = ""
 /// Set to True if you would like your video included in the course gallery.
 pub const include_video_in_gallery = False
 
-const default_code = "fn draw(shape_slider: Int) -> List(Path) {\n  [Path(Line(Point(0, 0), Point(100, 100)), 0, 10, 2)]\n}\n"
+// The select value for "create a drawing". It is not a drawing name.
+const new_option = "__new__"
+
+// Paths carry no colour of their own. This stroke shows on the dark canvas.
+const stroke_color = "#e8d8b0"
+
+// shape_slider is the Int passed to draw. The built-in reference documents [0, 100].
+const shape_min = 0
+const shape_max = 100
+
+// Playback rate for render.set_speed. 1.0 is normal, 0 pauses, and a negative
+// rate plays the drawing backward.
+const speed_min = -3.0
+const speed_max = 3.0
+const speed_step = 0.1
 
 // ── Model ──────────────────────────────────────────────────────────────────────
 
@@ -39,11 +62,26 @@ pub type Model {
     // Whether the code editor is shown.
     code_open: Bool,
     output: String,
+    // The Int passed to the user's draw function.
+    shape_slider: Int,
+    // Animation rate. 0 pauses, 1.0 is normal, and negative plays backward.
+    speed: Float,
+    // Saved drawings, examples first unless the user has added more.
+    drawings: List(data.Drawing),
+    // The name of the drawing open in the editor.
+    selected: String,
+    // True while the new-drawing prompt is open, so the menu shows that option.
+    pending_new: Bool,
   )
 }
 
 pub type Msg {
   SetCode(String)
+  SetShape(String)
+  SetSpeed(String)
+  Reset
+  SelectDrawing(String)
+  FinishNew(String)
 
   // Layout controls
   ToggleCode
@@ -52,12 +90,26 @@ pub type Msg {
 // ── Init ───────────────────────────────────────────────────────────────────────
 
 pub fn init(_flags: Nil) -> #(Model, Effect(Msg)) {
+  let library = data.load()
+  let source = case data.source(library.drawings, library.selected) {
+    Ok(source) -> source
+    Error(_) -> ""
+  }
   #(
-    Model(source: "", code_open: True, output: ""),
+    Model(
+      source:,
+      code_open: True,
+      output: "",
+      shape_slider: 0,
+      speed: 1.0,
+      drawings: library.drawings,
+      selected: library.selected,
+      pending_new: False,
+    ),
     // Effects that happen automatically at the start go here.
     effect.batch([
-      editor.mount(default_code, SetCode),
-      effect.from(fn(dispatch) { dispatch(SetCode(default_code)) }),
+      editor.mount(source, SetCode),
+      effect.from(fn(dispatch) { dispatch(SetCode(source)) }),
     ]),
   )
 }
@@ -80,20 +132,125 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     ToggleCode -> #(Model(..model, code_open: !model.code_open), effect.none())
 
-    // After each keystroke in the editor, evaluate user code and report errors.
-    SetCode(text) ->
-      case run_source(10, text) {
-        // Parsed and evaluated: show the result.
-        Ok(paths) -> #(
-          Model(..model, output: string.inspect(paths), source: text),
-          effect.none(),
+    // Jump the animation back to an empty canvas. The paths stay as they are.
+    Reset -> #(model, effect.from(fn(_dispatch) { render.reset_clock() }))
+
+    SelectDrawing(name) ->
+      case name == new_option {
+        // Ask for the name after this event returns. prompt() freezes the page,
+        // and a test that selects this option waits for the selection to finish
+        // first. Asking inside the change handler makes that wait time out.
+        True -> #(
+          Model(..model, pending_new: True),
+          effect.after_paint(fn(dispatch, _root) {
+            dispatch(FinishNew(data.prompt_drawing_name()))
+          }),
         )
-        // Broken (parse or evaluation): show the error.
-        Error(msg) -> #(
-          Model(..model, output: msg, source: text),
-          effect.none(),
+        // Choosing the drawing that is already open must not rebuild the menu.
+        // A test selects an option and waits for that choice to stick; remounting
+        // here replaces the <select> and the choice never settles.
+        False ->
+          case name == model.selected {
+            True -> #(model, effect.none())
+            False -> open_drawing(model, name)
+          }
+      }
+
+    // Cancel leaves the open drawing selected. A name copies its source, and a
+    // name already in the library gets a numeric suffix. The menu is pointed at
+    // that result after the new option has been added.
+    FinishNew(raw) ->
+      case data.fresh_name(model.drawings, raw) {
+        "" -> #(
+          Model(..model, pending_new: False),
+          effect.after_paint(fn(_dispatch, root) {
+            choose_option(root, model.selected)
+          }),
+        )
+        name -> {
+          let name = case name == new_option {
+            True -> data.fresh_name(model.drawings, name <> " 2")
+            False -> name
+          }
+          let drawings =
+            list.append(model.drawings, [
+              data.Drawing(name:, source: model.source),
+            ])
+          let model =
+            Model(..model, drawings:, selected: name, pending_new: False)
+          data.save(data.Library(selected: name, drawings:))
+          #(
+            model,
+            effect.after_paint(fn(_dispatch, root) { choose_option(root, name) }),
+          )
+        }
+      }
+
+    // After each keystroke in the editor, save that text on the open drawing
+    // and evaluate it.
+    SetCode(text) -> {
+      let drawings = data.update_source(model.drawings, model.selected, text)
+      let model = Model(..model, drawings:)
+      data.save(data.Library(selected: model.selected, drawings:))
+      redraw(model, model.shape_slider, text)
+    }
+
+    // A new shape value re-runs draw. The clock stays where it is.
+    SetShape(raw) ->
+      case int.parse(raw) {
+        Error(_) -> #(model, effect.none())
+        Ok(n) -> redraw(model, n, model.source)
+      }
+
+    // Speed is independent of the drawing. Negative rates play it backward.
+    SetSpeed(raw) ->
+      case parse_speed(raw) {
+        Error(_) -> #(model, effect.none())
+        Ok(rate) -> #(
+          Model(..model, speed: rate),
+          effect.from(fn(_dispatch) { render.set_speed(rate) }),
         )
       }
+  }
+}
+
+// Switch the editor and the canvas to a saved drawing. A drawing that does not
+// parse or evaluate shows its code and error, and the canvas is cleared.
+fn open_drawing(model: Model, name: String) -> #(Model, Effect(Msg)) {
+  case data.source(model.drawings, name) {
+    Error(_) -> #(model, effect.none())
+    Ok(source) -> {
+      let model = Model(..model, selected: name, pending_new: False)
+      data.save(data.Library(selected: name, drawings: model.drawings))
+      let #(model, draw) = case run_source(model.shape_slider, source) {
+        Ok(paths) -> #(Model(..model, output: "", source:), show_drawing(paths))
+        Error(msg) -> #(
+          Model(..model, output: msg, source:),
+          effect.from(fn(_dispatch) { render.set_drawing([]) }),
+        )
+      }
+      #(model, effect.batch([editor.mount(source, SetCode), draw]))
+    }
+  }
+}
+
+// Evaluate source at shape_slider. On success, replace the canvas paths without
+// restarting the clock. On failure, show the error and clear the canvas so the
+// previous drawing is not left on screen.
+fn redraw(
+  model: Model,
+  shape_slider: Int,
+  source: String,
+) -> #(Model, Effect(Msg)) {
+  case run_source(shape_slider, source) {
+    Ok(paths) -> #(
+      Model(..model, output: "", source: source, shape_slider: shape_slider),
+      show_drawing(paths),
+    )
+    Error(msg) -> #(
+      Model(..model, output: msg, source: source, shape_slider: shape_slider),
+      effect.from(fn(_dispatch) { render.set_drawing([]) }),
+    )
   }
 }
 
@@ -111,17 +268,137 @@ pub fn view(model: Model) -> Element(Msg) {
   // mounted CodeMirror editor keeps its state across show/hide.
   html.div([attr.class(app_class)], [
     html.div([attr.class("code-col")], [
-      editor.view_panel(ToggleCode),
+      editor.view_panel(ToggleCode, view_menu(model)),
     ]),
     view_anim(model),
   ])
 }
 
+fn view_menu(model: Model) -> Element(Msg) {
+  let value = case model.pending_new {
+    True -> new_option
+    False -> model.selected
+  }
+  html.select(
+    [
+      attr.class("drawing-select"),
+      attr.attribute("data-test-id", "drawing-select"),
+      attr.property("value", json.string(value)),
+      event.on_change(SelectDrawing),
+    ],
+    list.append(
+      list.map(model.drawings, fn(drawing) {
+        html.option(
+          [
+            attr.value(drawing.name),
+            attr.selected(drawing.name == value),
+          ],
+          drawing.name,
+        )
+      }),
+      [
+        html.option(
+          [attr.value(new_option), attr.selected(value == new_option)],
+          "New drawing...",
+        ),
+      ],
+    ),
+  )
+}
+
 fn view_anim(model: Model) -> Element(Msg) {
   html.div([attr.class("canvas-area")], [
     view_reveal_code(model),
-    html.pre([attr.class("output")], [html.text(model.output)]),
+    html.div([attr.class("canvas-stage")], [
+      html.canvas([attr.id("animation-canvas"), attr.class("canvas")]),
+      view_output(model),
+    ]),
+    view_controls(model),
   ])
+}
+
+fn view_controls(model: Model) -> Element(Msg) {
+  html.div([attr.class("controls")], [
+    html.div([attr.class("control-sliders")], [
+      slider(
+        label: "shape",
+        value: int.to_string(model.shape_slider),
+        shown: int.to_string(model.shape_slider),
+        min: int.to_string(shape_min),
+        max: int.to_string(shape_max),
+        step: "1",
+        test_id: "shape-slider",
+        on_input: SetShape,
+      ),
+      slider(
+        label: "speed",
+        value: float.to_string(model.speed),
+        shown: float.to_string(model.speed),
+        min: float.to_string(speed_min),
+        max: float.to_string(speed_max),
+        step: float.to_string(speed_step),
+        test_id: "speed-slider",
+        on_input: SetSpeed,
+      ),
+    ]),
+    html.button(
+      [
+        attr.class("reset"),
+        attr.attribute("title", "Reset the drawing"),
+        event.on_click(Reset),
+      ],
+      [html.text("Reset")],
+    ),
+  ])
+}
+
+fn slider(
+  label label: String,
+  value value: String,
+  shown shown: String,
+  min min: String,
+  max max: String,
+  step step: String,
+  test_id test_id: String,
+  on_input on_input: fn(String) -> Msg,
+) -> Element(Msg) {
+  html.label([attr.class("control")], [
+    html.span([attr.class("control-label")], [html.text(label)]),
+    html.input([
+      attr.type_("range"),
+      attr.class("control-slider"),
+      attr.min(min),
+      attr.max(max),
+      attr.step(step),
+      attr.value(value),
+      attr.attribute("data-test-id", test_id),
+      event.on_input(on_input),
+    ]),
+    html.span([attr.class("control-value")], [html.text(shown)]),
+  ])
+}
+
+// The interpreter error, if the latest edit did not produce a drawing. An empty
+// string means the canvas is showing the paths, so there is nothing to print.
+fn view_output(model: Model) -> Element(Msg) {
+  case model.output {
+    "" -> element.none()
+    text -> html.pre([attr.class("output")], [html.text(text)])
+  }
+}
+
+// A range input reports "2" or "2.0" depending on the step. float.parse only
+// accepts a decimal point, so an integer string is parsed and widened.
+fn parse_speed(raw: String) -> Result(Float, Nil) {
+  case float.parse(raw) {
+    Ok(rate) -> Ok(rate)
+    Error(_) -> result.map(int.parse(raw), int.to_float)
+  }
+}
+
+fn show_drawing(paths: List(Path)) -> Effect(Msg) {
+  let rendered = list.map(paths, render.render_path(_, stroke_color))
+  effect.from(fn(_dispatch) { render.set_drawing(rendered) })
 }
 
 // The button that brings the code column back, overlaid on the top-left of the

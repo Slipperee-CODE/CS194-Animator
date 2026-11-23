@@ -26,3 +26,10 @@ export function promptDrawingName() {
   const name = window.prompt("Name for the new drawing:");
   return name === null ? "" : name;
 }
+
+// The <select> value has to be set after its options exist. Assigning it during
+// the render that adds an option is ignored, and the previous choice stays up.
+export function chooseOption(root, name) {
+  const el = root?.querySelector?.('[data-test-id="drawing-select"]');
+  if (el) el.value = name;
+}

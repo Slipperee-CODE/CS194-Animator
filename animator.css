@@ -70,6 +70,18 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   font-family: 'Georgia', serif;
   font-size: 16px;
   letter-spacing: 1px;
+  flex-shrink: 0;
+}
+.drawing-select {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 46%;
+  background: #0d0d1a;
+  color: #e8d8b0;
+  border: 1px solid #4a4a8a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
 }
 
 /* Wrapper holding the editor. */
@@ -142,19 +154,33 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   overflow: hidden;
   position: relative;
   display: flex;
+  flex-direction: column;
+  background: #0a0a14;
+}
+
+/* The square canvas is sized against this stage, above the control bar. */
+.canvas-stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  display: flex;
   align-items: center;
   justify-content: center;
-  background: #0a0a14;
+  overflow: hidden;
   container-type: size;
 }
 
 /* The interpreter's List(Path) (or its error), shown as text before the
    animation pane is built. */
 .output {
-  align-self: stretch;
+  position: absolute;
+  inset: 0;
+  z-index: 5;
   margin: 0;
   padding: 16px;
   overflow: auto;
+  background: rgba(10, 10, 20, 0.92);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 13px;
   line-height: 1.5;
@@ -179,5 +205,55 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .canvas {
   width: min(100cqw, 100cqh);
   height: min(100cqw, 100cqh);
+}
+
+/* Shape and speed sliders, under the canvas, with reset beside them. */
+.controls {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid #3a3a5e;
+  background: #12121f;
+}
+.control-sliders {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.reset {
+  align-self: stretch;
+  padding: 0 16px;
+  background: #2a2a4a;
+  color: #d4c5a0;
+  border: 1px solid #4a4a8a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.reset:hover { background: #3a3a5e; }
+.control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.control-label {
+  width: 52px;
+  color: #b8a888;
+  font-size: 12px;
+}
+.control-slider {
+  flex: 1;
+  accent-color: #e8d8b0;
+  cursor: pointer;
+}
+.control-value {
+  width: 48px;
+  text-align: right;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: #e8d8b0;
 }
 
