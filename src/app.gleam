@@ -43,13 +43,14 @@ fn after(ms: Int, callback: fn() -> Nil) -> Nil
 
 /// Your app's public address, once you've deployed it in Problem 13, such as
 /// "https://your-username.github.io/animator/".
-pub const public_url = ""
+pub const public_url = "https://slipperee-code.github.io/CS194-Animator/"
 
 /// Set to True if you would like your app's URL included in the course gallery.
 pub const include_app_in_gallery = False
 
 /// A link to your video from Problem 14, which anyone with the link can watch.
-pub const video_url = ""
+pub const video_url =
+  "https://drive.google.com/file/d/1hTi9-w8zLm5HN6s4HAQjEv5Sq7cRXUUf/view?usp=sharing"
 
 /// Set to True if you would like your video included in the course gallery.
 pub const include_video_in_gallery = False
@@ -62,12 +63,15 @@ const stroke_color = "#e8d8b0"
 
 // shape_slider is the Int passed to draw. The built-in reference documents [0, 100].
 const shape_min = 0
+
 const shape_max = 100
 
 // Playback rate for render.set_speed. 1.0 is normal, 0 pauses, and a negative
 // rate plays the drawing backward.
 const speed_min = -3.0
+
 const speed_max = 3.0
+
 const speed_step = 0.1
 
 // ── Model ──────────────────────────────────────────────────────────────────────
@@ -208,7 +212,9 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
               case model.phase {
                 Playing -> #(
                   model,
-                  effect.from(fn(_dispatch) { render.set_speed(int.to_float(n)) }),
+                  effect.from(fn(_dispatch) {
+                    render.set_speed(int.to_float(n))
+                  }),
                 )
                 _ -> #(model, effect.none())
               }
@@ -231,10 +237,9 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
               Model(..model, phase: Playing),
               effect.from(fn(dispatch) {
                 render.set_speed(int.to_float(model.play_rate))
-                start_round(
-                  fn(ms) { dispatch(PlayerHit(ms)) },
-                  fn() { dispatch(PlayerWon) },
-                )
+                start_round(fn(ms) { dispatch(PlayerHit(ms)) }, fn() {
+                  dispatch(PlayerWon)
+                })
               }),
             )
             _ -> #(model, effect.none())
@@ -390,8 +395,7 @@ fn redraw(
   shape_slider: Int,
   source: String,
 ) -> #(Model, Effect(Msg)) {
-  let model =
-    Model(..model, phase: Watching, round_id: model.round_id + 1)
+  let model = Model(..model, phase: Watching, round_id: model.round_id + 1)
   let halt =
     effect.from(fn(_dispatch) {
       stop_game()
