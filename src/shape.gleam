@@ -11,6 +11,9 @@ pub type Point {
 
 pub type Shape {
   Line(start: Point, end: Point)
+  // A line that is fully present between the path's start and end times, then
+  // gone. Used for walls that have to get out of the way.
+  Gate(start: Point, end: Point)
 }
 
 pub type Path {

@@ -3,13 +3,14 @@
 ////
 //// The user's integers become the Float fields the geometry needs.
 
+import builtins
 import errors.{type EvalError, BadDrawing, PathLimit}
 import evaluator.{type GlobalFrame, type Value, VData, VInt, VList}
 import gleam/int
 import gleam/list
 import gleam/result
 import limits
-import shape.{type Path, type Point, type Shape, Line, Path, Point}
+import shape.{type Path, type Point, type Shape, Gate, Line, Path, Point}
 
 /// Call the program's draw function on shape_slider, returning its list of
 /// paths or the evaluation error, so the app can show failures.
@@ -17,6 +18,7 @@ pub fn try_draw(
   shape_slider: Int,
   global: GlobalFrame,
 ) -> Result(List(Path), EvalError) {
+  builtins.seed_random(shape_slider)
   case evaluator.run("draw", [VInt(shape_slider)], global) {
     Ok(VList(items)) ->
       // The step allowance bounds what evaluation can build, but the
@@ -52,6 +54,11 @@ fn to_shape(v: Value) -> Result(Shape, EvalError) {
       use a <- result.try(to_point(start))
       use b <- result.try(to_point(end))
       Ok(Line(a, b))
+    }
+    VData("Gate", [start, end]) -> {
+      use a <- result.try(to_point(start))
+      use b <- result.try(to_point(end))
+      Ok(Gate(a, b))
     }
     _ -> Error(BadDrawing("a Path's shape must be a recognized shape"))
   }

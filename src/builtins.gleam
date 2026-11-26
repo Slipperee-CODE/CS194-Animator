@@ -21,6 +21,14 @@ import gleam/result
 import limits
 import mutable_dict
 
+/// Start random()'s sequence over from this seed. Drawing reseeds with the
+/// shape slider before each run, so one slider value always repeats.
+@external(javascript, "./random_ffi.mjs", "seed")
+pub fn seed_random(seed: Int) -> Nil
+
+@external(javascript, "./random_ffi.mjs", "nextUnit")
+fn random_unit() -> Float
+
 /// A new global frame that binds the built-ins, ready for
 /// parser.parse_program to add a program's functions.
 pub fn global_frame() -> GlobalFrame {
@@ -204,8 +212,8 @@ fn bool_op(name: String, op: fn(Bool, Bool) -> Bool) -> #(String, Value) {
   })
 }
 
-// A random integer in [min, max). If max <= min the range is empty, so we
-// just return min rather than crash.
+// A random integer in [min, max), from the sequence seed_random started.
+// If max <= min the range is empty, so we just return min rather than crash.
 fn builtin_random(args: List(Value)) -> Result(Value, EvalError) {
   case args {
     [VInt(min), VInt(max)] ->
@@ -213,7 +221,7 @@ fn builtin_random(args: List(Value)) -> Result(Value, EvalError) {
         True -> Ok(VInt(min))
         False ->
           Ok(VInt(
-            min + float.truncate(float.random() *. int.to_float(max - min)),
+            min + float.truncate(random_unit() *. int.to_float(max - min)),
           ))
       }
     _ -> expects("random", "two ints")

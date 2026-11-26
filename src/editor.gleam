@@ -74,13 +74,20 @@ fn inputs() -> List(RefEntry) {
 
 fn functions() -> List(RefEntry) {
   [
-    RefEntry("random(min: Int, max: Int) -> Int", "a random int in [min, max)"),
+    RefEntry(
+      "random(min: Int, max: Int) -> Int",
+      "a random int in [min, max). The shape slider seeds the sequence, so the same value repeats it",
+    ),
     RefEntry("abs(n: Int) -> Int", "the absolute value of `n`"),
     RefEntry(
       "Point(x: Int, y: Int)",
       "a point on the canvas: (0, 0) is the center, x and y run from -500 to 500, and y grows downward",
     ),
     RefEntry("Line(start: Point, end: Point)", "a straight-line shape"),
+    RefEntry(
+      "Gate(start: Point, end: Point)",
+      "a line that is solid from the path's start until its end, then erased",
+    ),
     RefEntry(
       "Path(shape, start: Int, end: Int, thickness: Int)",
       "draws a shape between times `start` and `end`, in 1/10 s (end <= start draws it instantly)",

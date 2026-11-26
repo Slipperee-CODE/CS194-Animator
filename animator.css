@@ -206,6 +206,38 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   width: min(100cqw, 100cqh);
   height: min(100cqw, 100cqh);
 }
+.canvas:focus {
+  outline: 2px solid #e8d8b0;
+  outline-offset: -2px;
+}
+
+/* Countdown, game over, and win. Clicks pass through to the canvas. */
+.banner {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  z-index: 6;
+  pointer-events: none;
+  text-align: center;
+  color: #e8d8b0;
+  background: rgba(10, 10, 20, 0.82);
+  border: 1px solid #e8d8b0;
+  border-radius: 6px;
+  padding: 14px 22px;
+  min-width: 240px;
+}
+.banner p { margin: 4px 0; }
+.banner-title {
+  color: #ffffff;
+  font-size: 22px;
+}
+.banner-count {
+  color: #ffffff;
+  font-size: 64px;
+  line-height: 1;
+  margin: 0;
+}
 
 /* Shape and speed sliders, under the canvas, with reset beside them. */
 .controls {
@@ -223,9 +255,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   flex-direction: column;
   gap: 8px;
 }
-.reset {
-  align-self: stretch;
-  padding: 0 16px;
+.mode-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.play-row {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+.draw,
+.play,
+.play-rate {
   background: #2a2a4a;
   color: #d4c5a0;
   border: 1px solid #4a4a8a;
@@ -233,7 +275,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   cursor: pointer;
   font-size: 13px;
 }
-.reset:hover { background: #3a3a5e; }
+.draw,
+.play {
+  flex: 1;
+  padding: 0 16px;
+}
+.play-rate { padding: 0 8px; }
+.draw:hover,
+.play:hover { background: #3a3a5e; }
 .control {
   display: flex;
   align-items: center;

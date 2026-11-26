@@ -30,6 +30,7 @@ pub type Constructor =
 pub const constructors: List(Constructor) = [
   #("Point", ["x", "y"]),
   #("Line", ["start", "end"]),
+  #("Gate", ["start", "end"]),
   #("Path", ["shape", "start", "end", "thickness"]),
 ]
 

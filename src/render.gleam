@@ -1,6 +1,6 @@
 //// Convert each shape into a list of points called a RenderPath.
 
-import shape.{type Path, type Point, Line}
+import shape.{type Path, type Point, Gate, Line}
 
 /// One path as canvas.mjs setDrawing consumes it (field by field): the
 /// polyline, stroke colour/width, and the start and end times (in tenths of a second)
@@ -13,6 +13,9 @@ pub type RenderPath {
     color: String,
     start: Float,
     end: Float,
+    // When True, the whole line is solid from start until end and then erased.
+    // When False, end is when the cream stroke finishes, and the line stays.
+    vanishes: Bool,
   )
 }
 
@@ -40,6 +43,8 @@ pub fn reset_clock() -> Nil
 pub fn render_path(path: Path, color: String) -> RenderPath {
   case path.shape {
     Line(a, b) ->
-      RenderPath([a, b], path.thickness, color, path.start, path.end)
+      RenderPath([a, b], path.thickness, color, path.start, path.end, False)
+    Gate(a, b) ->
+      RenderPath([a, b], path.thickness, color, path.start, path.end, True)
   }
 }

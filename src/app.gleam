@@ -24,6 +24,23 @@ import shape.{type Path}
 @external(javascript, "./data_ffi.mjs", "chooseOption")
 fn choose_option(root: a, name: String) -> Nil
 
+// Play mode lives next to the animation clock so a hit uses the same revealed
+// stroke the canvas paints. These talk to that loop directly.
+@external(javascript, "./canvas.mjs", "armPlayer")
+fn arm_player() -> Nil
+
+@external(javascript, "./canvas.mjs", "startRound")
+fn start_round(on_hit: fn(Int) -> Nil, on_win: fn() -> Nil) -> Nil
+
+@external(javascript, "./canvas.mjs", "stopGame")
+fn stop_game() -> Nil
+
+@external(javascript, "./canvas.mjs", "focusCanvas")
+fn focus_canvas() -> Nil
+
+@external(javascript, "./canvas.mjs", "after")
+fn after(ms: Int, callback: fn() -> Nil) -> Nil
+
 /// Your app's public address, once you've deployed it in Problem 13, such as
 /// "https://your-username.github.io/animator/".
 pub const public_url = ""
@@ -72,14 +89,34 @@ pub type Model {
     selected: String,
     // True while the new-drawing prompt is open, so the menu shows that option.
     pending_new: Bool,
+    // 1, 2, or 3. Used by Play, separate from the speed slider.
+    play_rate: Int,
+    // Draw shows the art. Play counts down, then dodges the lines.
+    phase: Phase,
+    // Bumped whenever a round is replaced, so a leftover countdown tick is ignored.
+    round_id: Int,
   )
+}
+
+// Watching is ordinary playback. The other phases are the dodge game.
+pub type Phase {
+  Watching
+  Countdown(Int)
+  Playing
+  Won
+  Lost(Int)
 }
 
 pub type Msg {
   SetCode(String)
   SetShape(String)
   SetSpeed(String)
-  Reset
+  DrawArt
+  PlayLevel
+  SetPlayRate(String)
+  CountdownTick(Int)
+  PlayerHit(Int)
+  PlayerWon
   SelectDrawing(String)
   FinishNew(String)
 
@@ -105,6 +142,9 @@ pub fn init(_flags: Nil) -> #(Model, Effect(Msg)) {
       drawings: library.drawings,
       selected: library.selected,
       pending_new: False,
+      play_rate: 1,
+      phase: Watching,
+      round_id: 0,
     ),
     // Effects that happen automatically at the start go here.
     effect.batch([
@@ -132,8 +172,92 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     ToggleCode -> #(Model(..model, code_open: !model.code_open), effect.none())
 
-    // Jump the animation back to an empty canvas. The paths stay as they are.
-    Reset -> #(model, effect.from(fn(_dispatch) { render.reset_clock() }))
+    // Draw the art from the start, at the speed slider, with no player.
+    DrawArt -> #(
+      Model(..model, phase: Watching, round_id: model.round_id + 1),
+      effect.from(fn(_dispatch) {
+        stop_game()
+        render.set_speed(model.speed)
+        render.reset_clock()
+      }),
+    )
+
+    // Three seconds to move, then the lines reveal at the play-rate multiplier.
+    PlayLevel -> {
+      let round_id = model.round_id + 1
+      #(
+        Model(..model, phase: Countdown(3), round_id:),
+        effect.from(fn(dispatch) {
+          render.set_speed(0.0)
+          render.reset_clock()
+          arm_player()
+          focus_canvas()
+          after(1000, fn() { dispatch(CountdownTick(round_id)) })
+        }),
+      )
+    }
+
+    SetPlayRate(raw) ->
+      case int.parse(raw) {
+        Error(_) -> #(model, effect.none())
+        Ok(n) ->
+          case n >= 1 && n <= 5 {
+            False -> #(model, effect.none())
+            True -> {
+              let model = Model(..model, play_rate: n)
+              case model.phase {
+                Playing -> #(
+                  model,
+                  effect.from(fn(_dispatch) { render.set_speed(int.to_float(n)) }),
+                )
+                _ -> #(model, effect.none())
+              }
+            }
+          }
+      }
+
+    CountdownTick(id) ->
+      case id == model.round_id {
+        False -> #(model, effect.none())
+        True ->
+          case model.phase {
+            Countdown(n) if n > 1 -> #(
+              Model(..model, phase: Countdown(n - 1)),
+              effect.from(fn(dispatch) {
+                after(1000, fn() { dispatch(CountdownTick(id)) })
+              }),
+            )
+            Countdown(_) -> #(
+              Model(..model, phase: Playing),
+              effect.from(fn(dispatch) {
+                render.set_speed(int.to_float(model.play_rate))
+                start_round(
+                  fn(ms) { dispatch(PlayerHit(ms)) },
+                  fn() { dispatch(PlayerWon) },
+                )
+              }),
+            )
+            _ -> #(model, effect.none())
+          }
+      }
+
+    PlayerHit(ms) ->
+      case model.phase {
+        Playing -> #(
+          Model(..model, phase: Lost(ms)),
+          effect.from(fn(_dispatch) { render.set_speed(0.0) }),
+        )
+        _ -> #(model, effect.none())
+      }
+
+    PlayerWon ->
+      case model.phase {
+        Playing -> #(
+          Model(..model, phase: Won),
+          effect.from(fn(_dispatch) { render.set_speed(0.0) }),
+        )
+        _ -> #(model, effect.none())
+      }
 
     SelectDrawing(name) ->
       case name == new_option {
@@ -206,10 +330,17 @@ pub fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     SetSpeed(raw) ->
       case parse_speed(raw) {
         Error(_) -> #(model, effect.none())
-        Ok(rate) -> #(
-          Model(..model, speed: rate),
-          effect.from(fn(_dispatch) { render.set_speed(rate) }),
-        )
+        Ok(rate) -> {
+          let model = Model(..model, speed: rate)
+          // Play uses the 1x–5x menu. The slider must not overwrite that.
+          case model.phase {
+            Watching -> #(
+              model,
+              effect.from(fn(_dispatch) { render.set_speed(rate) }),
+            )
+            _ -> #(model, effect.none())
+          }
+        }
       }
   }
 }
@@ -220,7 +351,14 @@ fn open_drawing(model: Model, name: String) -> #(Model, Effect(Msg)) {
   case data.source(model.drawings, name) {
     Error(_) -> #(model, effect.none())
     Ok(source) -> {
-      let model = Model(..model, selected: name, pending_new: False)
+      let model =
+        Model(
+          ..model,
+          selected: name,
+          pending_new: False,
+          phase: Watching,
+          round_id: model.round_id + 1,
+        )
       data.save(data.Library(selected: name, drawings: model.drawings))
       let #(model, draw) = case run_source(model.shape_slider, source) {
         Ok(paths) -> #(Model(..model, output: "", source:), show_drawing(paths))
@@ -229,7 +367,17 @@ fn open_drawing(model: Model, name: String) -> #(Model, Effect(Msg)) {
           effect.from(fn(_dispatch) { render.set_drawing([]) }),
         )
       }
-      #(model, effect.batch([editor.mount(source, SetCode), draw]))
+      #(
+        model,
+        effect.batch([
+          editor.mount(source, SetCode),
+          draw,
+          effect.from(fn(_dispatch) {
+            stop_game()
+            render.set_speed(model.speed)
+          }),
+        ]),
+      )
     }
   }
 }
@@ -242,14 +390,24 @@ fn redraw(
   shape_slider: Int,
   source: String,
 ) -> #(Model, Effect(Msg)) {
+  let model =
+    Model(..model, phase: Watching, round_id: model.round_id + 1)
+  let halt =
+    effect.from(fn(_dispatch) {
+      stop_game()
+      render.set_speed(model.speed)
+    })
   case run_source(shape_slider, source) {
     Ok(paths) -> #(
       Model(..model, output: "", source: source, shape_slider: shape_slider),
-      show_drawing(paths),
+      effect.batch([show_drawing(paths), halt]),
     )
     Error(msg) -> #(
       Model(..model, output: msg, source: source, shape_slider: shape_slider),
-      effect.from(fn(_dispatch) { render.set_drawing([]) }),
+      effect.batch([
+        effect.from(fn(_dispatch) { render.set_drawing([]) }),
+        halt,
+      ]),
     )
   }
 }
@@ -310,8 +468,13 @@ fn view_anim(model: Model) -> Element(Msg) {
   html.div([attr.class("canvas-area")], [
     view_reveal_code(model),
     html.div([attr.class("canvas-stage")], [
-      html.canvas([attr.id("animation-canvas"), attr.class("canvas")]),
+      html.canvas([
+        attr.id("animation-canvas"),
+        attr.class("canvas"),
+        attr.attribute("tabindex", "0"),
+      ]),
       view_output(model),
+      view_banner(model),
     ]),
     view_controls(model),
   ])
@@ -341,15 +504,49 @@ fn view_controls(model: Model) -> Element(Msg) {
         on_input: SetSpeed,
       ),
     ]),
-    html.button(
-      [
-        attr.class("reset"),
-        attr.attribute("title", "Reset the drawing"),
-        event.on_click(Reset),
-      ],
-      [html.text("Reset")],
-    ),
+    html.div([attr.class("mode-controls")], [
+      html.button(
+        [
+          attr.class("draw"),
+          attr.attribute("title", "Draw the art"),
+          event.on_click(DrawArt),
+        ],
+        [html.text("Draw")],
+      ),
+      html.div([attr.class("play-row")], [
+        html.button(
+          [
+            attr.class("play"),
+            attr.attribute("title", "Play this drawing"),
+            event.on_click(PlayLevel),
+          ],
+          [html.text("Play")],
+        ),
+        html.select(
+          [
+            attr.class("play-rate"),
+            attr.attribute("data-test-id", "play-rate"),
+            attr.attribute("title", "Play speed"),
+            event.on_change(SetPlayRate),
+          ],
+          [
+            play_rate_option(model, 1),
+            play_rate_option(model, 2),
+            play_rate_option(model, 3),
+            play_rate_option(model, 4),
+            play_rate_option(model, 5),
+          ],
+        ),
+      ]),
+    ]),
   ])
+}
+
+fn play_rate_option(model: Model, rate: Int) -> Element(Msg) {
+  html.option(
+    [attr.value(int.to_string(rate)), attr.selected(model.play_rate == rate)],
+    int.to_string(rate) <> "x",
+  )
 }
 
 fn slider(
@@ -380,6 +577,40 @@ fn slider(
 
 // The interpreter error, if the latest edit did not produce a drawing. An empty
 // string means the canvas is showing the paths, so there is nothing to print.
+fn view_banner(model: Model) -> Element(Msg) {
+  case model.phase {
+    Countdown(n) ->
+      html.div([attr.class("banner")], [
+        html.p([attr.class("banner-count")], [html.text(int.to_string(n))]),
+        html.p([], [html.text("Click the canvas, then WASD")]),
+      ])
+    Lost(ms) ->
+      html.div([attr.class("banner")], [
+        html.p([attr.class("banner-title")], [html.text("Game over")]),
+        html.p([], [
+          html.text("You survived " <> format_seconds(ms) <> " seconds"),
+        ]),
+        html.p([], [html.text("Click Play below to play again")]),
+      ])
+    Won ->
+      html.div([attr.class("banner")], [
+        html.p([attr.class("banner-title")], [html.text("You win")]),
+        html.p([], [
+          html.text(
+            "Speed multiplier: " <> int.to_string(model.play_rate) <> "x",
+          ),
+        ]),
+      ])
+    _ -> element.none()
+  }
+}
+
+// Whole seconds plus one decimal place, from a millisecond count.
+fn format_seconds(ms: Int) -> String {
+  let tenths = ms / 100
+  int.to_string(tenths / 10) <> "." <> int.to_string(tenths % 10)
+}
+
 fn view_output(model: Model) -> Element(Msg) {
   case model.output {
     "" -> element.none()
